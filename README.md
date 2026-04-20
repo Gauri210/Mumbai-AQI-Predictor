@@ -93,6 +93,4 @@ aqi-project/
 - **Backend:** Flask, statsmodels (OLS)
 - **Frontend:** HTML, Tailwind CSS, Lucide Icons
 - **APIs:** OpenMeteo (weather), CPCB (AQI)
-- **Deployment:** Render, Waitress
-
-Data Science Project - 2024
+- **Deployment:** Render
