@@ -1,0 +1,9 @@
+flask
+flask-cors
+setuptools
+pandas
+scikit-learn
+statsmodels
+numpy
+gunicorn
+requests
