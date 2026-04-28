@@ -233,9 +233,22 @@
       chevron.style.transform = content.classList.contains('open') ? 'rotate(180deg)' : 'rotate(0deg)';
     }
 
+    async function fetchAutoPrediction() {
+      try {
+        const res = await fetch('/auto-predict');
+        const data = await res.json();
+        if (data.status === 'success' && data.aqi !== null) {
+          setAqiCard('prediction-card', data.aqi, 'pred-aqi-num', 'pred-aqi-label', 'pred-aqi-advice');
+          document.getElementById('prediction-result').classList.add('show');
+        }
+      } catch (e) {
+        console.error('Auto-prediction fetch failed:', e);
+      }
+    }
+
     fetchWeather();
     fetchTodayAqi();
-    fetchHistory();
+    fetchHistory().then(() => fetchAutoPrediction());
     lucide.createIcons();
   </script>
 </body>

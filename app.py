@@ -4,7 +4,7 @@ import pickle
 import sys
 import threading
 import time
-from datetime import date
+from datetime import date, datetime
 import pandas as pd
 import numpy as np
 import requests
@@ -62,6 +62,11 @@ def load_history():
 history_data = load_history()
 last_7_aqi = history_data['values']
 
+# Cached auto-prediction result
+cached_prediction = {'aqi': None, 'timestamp': None, 'status': 'pending'}
+
+AQI_LAG_COLS = ['AQI_lag1', 'AQI_lag2', 'AQI_lag7', 'AQI_roll7']
+
 def fetch_current_aqi():
     """Fetch today's AQI from data.gov.in API."""
     try:
@@ -115,14 +120,75 @@ def update_aqi_history():
     except Exception as e:
         print(f'[AQI History] Failed to save: {e}')
 
+def run_auto_prediction():
+    """Fetch live weather, build payload from history, run model, cache result."""
+    global cached_prediction
+    if model is None:
+        cached_prediction = {'aqi': None, 'timestamp': None, 'status': 'model_not_loaded'}
+        return
+    try:
+        # Fetch live weather
+        res = requests.get(
+            'https://api.open-meteo.com/v1/forecast',
+            params={
+                'latitude': 19.076, 'longitude': 72.8777,
+                'current': 'temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation',
+                'timezone': 'Asia/Kolkata'
+            }, timeout=10
+        )
+        w = res.json()['current']
+        temp = w['temperature_2m']
+        humidity = w['relative_humidity_2m']
+        windspeed = w['wind_speed_10m']
+        precipitation = w['precipitation']
+    except Exception as e:
+        print(f'[AutoPredict] Weather fetch failed: {e}')
+        cached_prediction = {'aqi': None, 'timestamp': None, 'status': 'weather_unavailable'}
+        return
+
+    try:
+        now = datetime.now()
+        history = last_7_aqi
+        payload = {
+            'AQI_lag1': history[6], 'AQI_lag2': history[5], 'AQI_lag7': history[0],
+            'AQI_roll7': sum(history) / 7,
+            'temp': temp, 'humidity': humidity, 'windspeed': windspeed,
+            'precipitation': precipitation,
+            'dayofweek': now.weekday(), 'season': get_season(now.month)
+        }
+        df = pd.DataFrame([payload])[feature_cols]
+        for col in AQI_LAG_COLS:
+            if col in df.columns:
+                df[col] = np.log1p(df[col])
+        scaled = scaler.transform(df)
+        df_scaled = pd.DataFrame(scaled, columns=feature_cols)
+        log_pred = model.predict(df_scaled)[0]
+        pred = float(np.expm1(log_pred))
+        pred = max(0, min(500, pred))
+        cached_prediction = {
+            'aqi': round(pred, 1),
+            'timestamp': now.isoformat(),
+            'status': 'success'
+        }
+        print(f'[AutoPredict] Prediction: {cached_prediction["aqi"]}')
+    except Exception as e:
+        print(f'[AutoPredict] Prediction failed: {e}')
+        cached_prediction = {'aqi': None, 'timestamp': None, 'status': 'error'}
+
+def get_season(month):
+    if month in (12, 1, 2): return 0
+    if month in (3, 4, 5): return 1
+    if month in (6, 7, 8): return 2
+    return 3
+
 def daily_updater():
-    """Background thread: update AQI history once per day."""
-    # Run once on startup
+    """Background thread: update AQI history and run prediction once per day."""
     update_aqi_history()
+    run_auto_prediction()
     while True:
-        # Sleep 24 hours then update again
         time.sleep(86400)
         update_aqi_history()
+        run_auto_prediction()
 
 # Start the background updater thread (daemon so it dies when the app stops)
 updater_thread = threading.Thread(target=daily_updater, daemon=True)
@@ -192,7 +258,11 @@ def get_today_aqi():
 def get_history():
     return jsonify({'history': last_7_aqi})
 
-AQI_LAG_COLS = ['AQI_lag1', 'AQI_lag2', 'AQI_lag7', 'AQI_roll7']
+@app.route('/auto-predict', methods=['GET'])
+def auto_predict():
+    """Return the cached server-side prediction."""
+    return jsonify(cached_prediction)
+
 
 @app.route('/predict', methods=['POST'])
 def predict():
